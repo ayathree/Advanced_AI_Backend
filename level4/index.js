@@ -3,6 +3,7 @@ import dotenv from "dotenv"
 import { GoogleGenAI } from "@google/genai"
 import { ChatGoogleGenerativeAI } from "@langchain/google-genai"
 import { ChatGroq } from "@langchain/groq"
+import { Annotation, StateGraph } from "@langchain/langgraph"
 dotenv.config()
 
 const app = express()
@@ -56,9 +57,16 @@ const llm = new ChatGroq({
     maxTokens: 100,
     maxRetries: 2
 })
-app.post("/ai", async (req, res) => {
-    const { input } = req.body
 
+
+//langgraph
+const State = Annotation.Root({
+    prompt: Annotation,
+    aiMsg: Annotation
+})
+
+const callLLM = async (state) => {
+    console.log("state:", state)
     const response = await llm.invoke([
         {
             role: "system",
@@ -66,11 +74,35 @@ app.post("/ai", async (req, res) => {
         },
         {
             role: "human",
-            content: input
+            content: state.prompt
         }
     ])
 
-    return res.status(200).json({ "ai:": response.content })
+    return { aiMsg: response.content }
+}
+
+const graph = new StateGraph(State)
+    .addNode("agent", callLLM)
+    .addEdge("__start__", "agent")
+    .addEdge("agent", "__end__")
+    .compile()
+
+
+
+
+
+
+
+
+
+app.post("/ai", async (req, res) => {
+    const { input } = req.body
+
+    const response = await graph.invoke({ prompt: input })
+    console.log(response)
+
+
+    return res.status(200).json({ "ai:": response })
 
 })
 
