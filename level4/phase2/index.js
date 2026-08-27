@@ -8,6 +8,8 @@ import { PDFParse } from "pdf-parse"
 import { RecursiveCharacterTextSplitter } from "@langchain/textsplitters"
 import { GoogleGenerativeAIEmbeddings } from "@langchain/google-genai";
 import { TaskType } from "@google/generative-ai";
+import { QdrantVectorStore } from "@langchain/qdrant"
+import { HumanMessage, SystemMessage } from "@langchain/core/messages"
 
 dotenv.config()
 
@@ -20,7 +22,7 @@ app.use(express.json())
 const llm = new ChatGroq({
     model: "openai/gpt-oss-120b",
     temperature: 2,
-    maxTokens: 100,
+    maxTokens: undefined,
     maxRetries: 2
 })
 
@@ -35,7 +37,10 @@ const embeddings = new GoogleGenerativeAIEmbeddings({
 });
 
 
-
+const vectorStore = await QdrantVectorStore.fromExistingCollection(embeddings, {
+    url: process.env.QDRANT_URL,
+    collectionName: "grocery-store",
+});
 
 
 const upload = async () => {
@@ -49,9 +54,9 @@ const upload = async () => {
         chunkOverlap: 200
     })
     const docs = await splitter.createDocuments([text])
-    console.log(docs)
+    await vectorStore.addDocuments(docs)
 }
-upload()
+
 
 
 
@@ -75,13 +80,31 @@ upload()
 app.post("/ai", async (req, res) => {
     const { input } = req.body
 
-    const response = await llm.invoke(
-        input
-    )
+    const docs = await vectorStore.similaritySearch(input, 5)
+    const context = docs.map((d) => d.pageContent).join("/n")
+
+    const response = await llm.invoke([
+        new SystemMessage(`You are a RAG AI Assistant.
+
+    STRICT RULES:
+    - Answer ONLY from context
+    - Do not use outside knowledge
+    - If answer not found say:
+      "I don't know from uploaded PDF."        
+    
+    
+    Context:
+    ${context}`)
+        ,
+        new HumanMessage(input)
+
+    ])
+
+    console.log(response)
 
 
 
-    return res.status(200).json({ "ai:": response.content })
+    return res.status(200).json({ ai: response.content })
 
 })
 
@@ -98,3 +121,5 @@ app.get("/", (req, res) => {
 app.listen(port, () => {
     console.log("server started")
 })
+
+
